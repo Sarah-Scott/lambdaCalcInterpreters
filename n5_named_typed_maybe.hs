@@ -2,7 +2,7 @@ import Data.Maybe
 import Control.Monad
 
 
---data type for some simple types
+--data type for named variables and some simple types
 data Term = Num Int |
             Plus Term Term |
             Minus Term Term |
@@ -17,6 +17,7 @@ data Term = Num Int |
             Id String
           deriving (Show, Eq)
 
+--substitution operation
 subst :: String -> Maybe Term -> Term -> Term
 subst i v t = case t of Num x -> Num x
                         Plus t1 t2 -> Plus (subst i v t1) (subst i v t2)
