@@ -4,10 +4,15 @@ data Term = Num Int |
             Bind String Term Term |
             Lambda String TermType Term |
             App Term Term |
-            Id String
+            Id String |
+            Boolean Bool |
+            And Term Term |
+            Leq Term Term |
+            IsZero Term
           deriving (Show, Eq)
 
 data TermType = TNum |
+                TBool |
                 TFunc TermType TermType
               deriving (Show, Eq)
 
@@ -36,4 +41,16 @@ typeOfTerm cont t = case t of Num n -> return TNum
                                 if (domainType == aType)
                                   then (return rangeType)
                                   else Nothing
+                              Boolean b -> return TBool
+                              And t1 t2 -> do
+                                TBool <- (typeOfTerm cont t1)
+                                TBool <- (typeOfTerm cont t2)
+                                return TBool
+                              Leq t1 t2 -> do
+                                TNum <- (typeOfTerm cont t1)
+                                TNum <- (typeOfTerm cont t2)
+                                return TBool
+                              IsZero n -> do
+                                TNum <- (typeOfTerm cont n)
+                                return TBool
 
