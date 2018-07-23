@@ -6,6 +6,7 @@ data Reader e a = Reader (e -> a)
 runR :: Reader e a -> e -> a
 runR (Reader f) e = f e
 
+  --makes the Reader a monad (copied from internet)
 instance Functor (Reader e) where
   fmap = liftM
 
@@ -17,20 +18,22 @@ instance Monad (Reader e) where
   return x = Reader $ \e -> x
   g >>= f = Reader $ \e -> runR (f (runR g e)) e
 
+
+  --just returns the current environment
 ask :: Reader a a
 ask = Reader $ \e -> e
 
+  --returns the environment after a function has been applied to it
 asks :: (e -> a) -> Reader e a
 asks f = ask >>= \e -> (return (f e))
-
-
 
 type Env = [(String,Term)]
 
 lookupName :: String -> Env -> Term
 lookupName s e = case (lookup s e) of Just x -> x
                                       _ -> error "name not found"
-                                      
+
+  --runs a Reader inside a temporary, local environment
 local :: (e -> e') -> Reader e' t -> Reader e t
 local f r = ask >>= \e -> return (runR r (f e))
 
