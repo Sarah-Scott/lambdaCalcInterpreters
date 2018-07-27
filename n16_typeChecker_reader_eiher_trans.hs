@@ -126,16 +126,23 @@ getTypeOf t = runRead (typeOfTerm t) []
 -------------------------------------------------------------------------
 
 {-
+
 getTypeOf (Bind "x" (Num 7) (Plus (Id "x") (Num 2)))
      Right TNum
+
 getTypeOf (Bind "x" (Num 7) (Plus (Id "x") (Boolean True)))
      Left "Type error in Plus"
+
 getTypeOf (App (Lambda "y" (TBool) (And (Id "y") (Boolean True))) (Boolean False))
      Right TBool
+
 getTypeOf (App (Lambda "y" (TBool) (And (Id "y") (Num 3))) (Boolean False))
      Left "Type error in And"
+
 getTypeOf (App (Lambda "x" TNum (Plus (Num 3) (Id "x"))) (Boolean False))
      Left "Type error in App"
+
 getTypeOf (App (Lambda "x" TBool (And (Id "y") (Boolean True))) (Boolean False))
      Left "Variable not found"
+
 -}
