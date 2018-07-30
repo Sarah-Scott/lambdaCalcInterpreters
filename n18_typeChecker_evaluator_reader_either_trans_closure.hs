@@ -134,25 +134,35 @@ getTypeOf t = runRead (typeOfTerm t) []
 
 -------------------------------------------------------------------------
 
-type Env = [(String,Term)]
+type Env = [(String,TermVal)]
 
-lookupName :: String -> Env -> Term
+data TermVal = VNum Int |
+               VClosure String Term Env |
+               VBoolean Bool
+             deriving (Show,Eq)
+               
+lookupName :: String -> Env -> TermVal
 lookupName s e = case (lookup s e) of Just x -> x
 
-addVar :: String -> Term -> Env -> Env
+addVar :: String -> TermVal -> Env -> Env
 addVar i t e = (i,t):e
 
-eval :: Term -> Reader Env Term
-eval t = case t of Num n -> return (Num n)
+useClosure :: String -> TermVal -> Env -> Env -> Env
+useClosure i v e _ = (i,v):e
+
+eval :: Term -> Reader Env TermVal
+eval t = case t of Num n -> return (VNum n)
                    Plus t1 t2 -> do
-                      Num n1 <- eval t1
-                      Num n2 <- eval t2
-                      return (Num ((+) n1 n2))
+                      VNum n1 <- eval t1
+                      VNum n2 <- eval t2
+                      return (VNum ((+) n1 n2))
                    Minus t1 t2 -> do
-                     Num n1 <- eval t1
-                     Num n2 <- eval t2
-                     return (Num ((-) n1 n2))
-                   Lambda i ty b -> return (Lambda i ty b)
+                     VNum n1 <- eval t1
+                     VNum n2 <- eval t2
+                     return (VNum ((-) n1 n2))
+                   Lambda i ty b -> do
+                     env <- ask
+                     return (VClosure i b env)
                    Id i -> do
                      env <- ask
                      return (lookupName i env)
@@ -160,23 +170,23 @@ eval t = case t of Num n -> return (Num n)
                      v' <- eval v
                      local (addVar i v') (eval b)
                    App f a -> do
-                     Lambda i ty b <- eval f
+                     VClosure i b e <- eval f
                      a' <- eval a
-                     local (addVar i a') (eval b) 
+                     local (useClosure i a' e) (eval b) 
                    And t1 t2 -> do
-                     Boolean b1 <- eval t1
-                     Boolean b2 <- eval t2
-                     return (Boolean ((&&) b1 b2))
+                     VBoolean b1 <- eval t1
+                     VBoolean b2 <- eval t2
+                     return (VBoolean ((&&) b1 b2))
                    Leq t1 t2 -> do
-                     Num n1 <- eval t1
-                     Num n2 <- eval t2
-                     return (Boolean ((<=) n1 n2))
+                     VNum n1 <- eval t1
+                     VNum n2 <- eval t2
+                     return (VBoolean ((<=) n1 n2))
                    IsZero t -> do
-                     Num n <- eval t
-                     return (Boolean ((==) n 0))
-                   Boolean b -> return (Boolean b)
+                     VNum n <- eval t
+                     return (VBoolean ((==) n 0))
+                   Boolean b -> return (VBoolean b)
 
-evalStart :: Term -> Either String Term
+evalStart :: Term -> Either String TermVal
 evalStart t = case (getTypeOf t) of Right _ -> Right (runR (eval t) [])
                                     Left i -> Left i
 
@@ -185,13 +195,13 @@ evalStart t = case (getTypeOf t) of Right _ -> Right (runR (eval t) [])
 {-
 
 evalStart (Bind "x" (Num 7) (Plus (Id "x") (Num 2)))
-              Right (Num 9)
+              Right (VNum 9)
 
 evalStart (Bind "x" (Num 7) (Plus (Id "x") (Boolean True)))
               Left "Type error in Plus"
 
 evalStart (App (Lambda "y" (TBool) (And (Id "y") (Boolean True))) (Boolean False))
-              Right (Boolean False)
+              Right (VBoolean False)
 
 evalStart (App (Lambda "y" (TBool) (And (Id "y") (Num 3))) (Boolean False))
               Left "Type error in And"
@@ -203,9 +213,9 @@ evalStart (App (Lambda "x" TBool (And (Id "y") (Boolean True))) (Boolean False))
               Left "Variable not found"
 
 evalStart (Bind "f" (Lambda "x" (TNum) (Plus (Id "x") (Num 3))) (App (Id "f") (Num 2)))
-              Right (Num 5)
+              Right (VNum 5)
 
 evalStart (Bind "n" (Num 1) (Bind "f" (Lambda "x" TNum (Plus (Id "x") (Id "n"))) (Bind "n" (Num 2) (App (Id "f") (Num 1)))))
-              Right (VNum 3)
-
+              Right (VNum 2)
 -}
+
