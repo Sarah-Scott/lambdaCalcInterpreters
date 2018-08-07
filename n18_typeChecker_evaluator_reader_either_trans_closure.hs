@@ -217,5 +217,9 @@ evalStart (Bind "f" (Lambda "x" (TNum) (Plus (Id "x") (Num 3))) (App (Id "f") (N
 
 evalStart (Bind "n" (Num 1) (Bind "f" (Lambda "x" TNum (Plus (Id "x") (Id "n"))) (Bind "n" (Num 2) (App (Id "f") (Num 1)))))
               Right (VNum 2)
+
+evalStart (Bind "n" (Num 6) (Bind "n" (Num 1) (Bind "f" (Lambda "x" TNum (Plus (Id "x") (Id "n"))) (Bind "n" (Num 2) (App (Id "f") (Num 1))))))
+              Right (VNum 2)
+
 -}
 
