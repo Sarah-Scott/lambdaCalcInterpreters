@@ -26,6 +26,9 @@ asks f = ask >>= \e -> (return (f e))
 local :: (e -> e') -> Reader e' t -> Reader e t
 local f r = ask >>= \e -> return (runR r (f e))
 
+lookupName :: Id -> Env -> APDT
+lookupName i e = case (lookup i e) of Just x -> x
+
 type Id = String
 
 type Place = Int
@@ -60,20 +63,32 @@ isEvid ev = case ev of LN e0 e1 -> if (isEvid e0 && isEvid e1) then True else Fa
 
 
 --comma place will be necessary later on
-eval1 :: (APDT,Place) -> (APDT,Place)
-eval1 (t,p) = case t of KIM q -> (Kim q p, p)
-                        USM -> (Usm p, p)
-                        LN t0 t1 -> if (isEvid t0) then
-                                        (if (t1==SIG) then
-                                           (LN t0 (Sig t0 p), p)
-                                         else (let (t1',p') = eval (t1,p) in (LN t0 t1', p)))
-                                     else (let (t0',p') = eval (t0,p) in (LN t0' t1, p))
-                        BR t0 t1 -> let (t0',p0) = eval (t0,p); (t1',p1) = eval (t1,p)
-                                      in (BR t0' t1', p)
-                        AT q t0 -> let (t0',q') = eval (t0,q) in (t0',p)
+eval :: (APDT,Place) -> Reader Env (APDT,Place)
+eval (t,p) = case t of KIM q -> return (Kim q p, p)
+                       USM -> return (Usm p, p)
+                       LN t0 t1 ->
+                         if (isEvid t0)
+                         then (if (t1==SIG)
+                                then return (LN t0 (Sig t0 p), p)
+                               else do
+                                  (t1',p') <- eval (t1,p)
+                                  return (LN t0 t1', p))
+                         else do
+                           (t0',p') <- eval (t0,p)
+                           eval (LN t0' t1, p)                     
+                       BR t0 t1 -> do
+                         (t0',p0) <- eval (t0,p)
+                         (t1',p1) <- eval (t1,p)
+                         return (BR t0' t1', p)
+                       AT q t0 -> do
+                         (t0',q') <- eval (t0,q)
+                         return (t0',p)
+                       VAR i -> do
+                         env <- ask
+                         return (lookupName i env, p)
 
-eval :: (APDT,Place) -> (APDT,Place)
-eval (t,p) = if (isEvid t) then (t,p) else (let (t',p') = eval1 (t,p) in eval (t',p'))
+evaluate :: (APDT,Place) -> (APDT,Place)
+evaluate (t,p) = runR (eval (t,p)) [("x",Mt)]
 
 data E = SeqE E E |
          ParE E E |
@@ -126,21 +141,26 @@ getTypeOf t = runR (typeOfTerm t) [0]
 
 {-
 
-eval (LN (KIM 1) (USM), 0)
+evaluate (LN (KIM 1) (USM), 0)
   (LN (Kim 1 0) (Usm 0),0)
 
-eval (LN (KIM 1) (SIG), 0)
+evaluate (LN (KIM 1) (SIG), 0)
   (LN (Kim 1 0) (Sig (Kim 1 0) 0),0)
 
-eval (BR USM (KIM 1), 0)
+evaluate (BR USM (KIM 1), 0)
   (BR (Usm 0) (Kim 1 0),0)
 
-eval (AT 1 USM, 0)
+evaluate (AT 1 USM, 0)
   (Usm 1,0)
 
+evaluate (LN (VAR "x") (USM),0)
+  (LN Mt (Usm 0),0)
 -----------------------------------------------------------------
 
 getTypeOf (LN (AT 1 USM) USM)
   SeqE (U 1) (U 0)
+
+getTypeOf (LN (KIM 1) (SIG))
+  SigE (K 1 0) 0
 
 -}

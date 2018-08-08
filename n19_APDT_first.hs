@@ -73,6 +73,7 @@ isEvid ev = case ev of Seq e0 e1 -> if (isEvid e0 && isEvid e1) then True else F
 
 --are static semantics the same as typechecking?
 
+--comma place will be necessary later on
 --the comma place seems a little repetitive
 --the comma place isnt so bad after doing At
 eval1 :: (Term,Place) -> (Term,Place)
