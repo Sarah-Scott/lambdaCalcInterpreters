@@ -26,8 +26,39 @@ asks f = ask >>= \e -> (return (f e))
 local :: (e -> e') -> Reader e' t -> Reader e t
 local f r = ask >>= \e -> return (runR r (f e))
 
+newtype ReaderT r m a = ReaderT { runReaderT :: r -> m a }
+
+instance Monad m => Monad (ReaderT r m) where
+  return = liftReaderT . return
+  m >>= k = ReaderT $ \r -> do
+    a <- runReaderT m r
+    runReaderT (k a) r
+
+instance Applicative m => Applicative (ReaderT r m) where
+  pure = liftReaderT . pure
+  f <*> v = ReaderT $ \r -> runReaderT f r <*> runReaderT v r
+
+instance Functor m => Functor (ReaderT r m) where
+  fmap f = mapReaderT (fmap f)
+
+liftReaderT :: m a -> ReaderT r m a
+liftReaderT m = ReaderT (const m)
+
+mapReaderT :: (m a -> n b) -> ReaderT r m a -> ReaderT r n b
+mapReaderT f m = ReaderT $ f . runReaderT m
+
+askT :: (Monad m) => ReaderT r m r
+askT = ReaderT return
+
+localT :: (r -> r) -> ReaderT r m a -> ReaderT r m a
+localT = withReaderT
+
+withReaderT :: (r' -> r) -> ReaderT r m a -> ReaderT r' m a
+withReaderT f m = ReaderT $ runReaderT m . f
+
 lookupName :: Id -> Env -> APDT
 lookupName i e = case (lookup i e) of Just x -> x
+                                      
 
 type Id = String
 
@@ -63,7 +94,7 @@ isEvid ev = case ev of LN e0 e1 -> if (isEvid e0 && isEvid e1) then True else Fa
 
 
 --comma place will be necessary later on
-eval :: (APDT,Place) -> Reader Env (APDT,Place)
+eval :: (APDT,Place) -> ReaderT Env Maybe (APDT,Place)
 eval (t,p) = case t of KIM q -> return (Kim q p, p)
                        USM -> return (Usm p, p)
                        LN t0 t1 ->
@@ -84,11 +115,24 @@ eval (t,p) = case t of KIM q -> return (Kim q p, p)
                          (t0',q') <- eval (t0,q)
                          return (t0',p)
                        VAR i -> do
-                         env <- ask
-                         return (lookupName i env, p)
+                         env <- askT
+                         let m = lookup i env
+                           in case m of Just v -> if (isEvid v)
+                                                  then (return (v,p))
+                                                  else (liftReaderT  Nothing) --identifier is not bound to a value
 
-evaluate :: (APDT,Place) -> (APDT,Place)
-evaluate (t,p) = runR (eval (t,p)) [("x",Mt)]
+                                        _ -> liftReaderT Nothing --identifier does not exist in the environment
+                       _ -> liftReaderT Nothing
+
+
+                                              
+                         
+
+runRead :: ReaderT r m a -> r -> m a
+runRead (ReaderT f) e = f e
+
+evaluate :: (APDT,Place) -> Maybe (APDT,Place)
+evaluate (t,p) = runRead (eval (t,p)) [("x",Mt),("y",USM)]
 
 data E = SeqE E E |
          ParE E E |
@@ -125,8 +169,7 @@ typeOfTerm t = case t of Usm p -> return (U p)
                            else do
                              e0 <- typeOfTerm t0
                              e1 <- typeOfTerm t1
-                             return (SeqE e0 e1)
-                                        
+                             return (SeqE e0 e1)           
                          BR t0 t1 -> do
                            e0 <- typeOfTerm t0
                            e1 <- typeOfTerm t1
@@ -139,19 +182,29 @@ getTypeOf t = runR (typeOfTerm t) [0]
 {-
 
 evaluate (LN (KIM 1) (USM), 0)
-  (LN (Kim 1 0) (Usm 0),0)
+  Just (LN (Kim 1 0) (Usm 0),0)
 
 evaluate (LN (KIM 1) (SIG), 0)
-  (LN (Kim 1 0) (Sig (Kim 1 0) 0),0)
+  Just (LN (Kim 1 0) (Sig (Kim 1 0) 0),0)
 
 evaluate (BR USM (KIM 1), 0)
-  (BR (Usm 0) (Kim 1 0),0)
+  Just (BR (Usm 0) (Kim 1 0),0)
 
 evaluate (AT 1 USM, 0)
-  (Usm 1,0)
+  Just (Usm 1,0)
 
 evaluate (LN (VAR "x") (USM),0)
-  (LN Mt (Usm 0),0)
+  Just (LN Mt (Usm 0),0)
+
+
+evaluate (BR (KIM 1) (VAR "y"),0) identifier is not bound to a value
+  Nothing
+
+evaluate (LN (VAR "z") (USM),0) identifier does not exist in the environment
+  Nothing
+
+evaluate (BR (KIM 1) (SIG), 0) signing cannot be used in parallel execution
+  Nothing
 -----------------------------------------------------------------
 
 getTypeOf (LN (AT 1 USM) USM)
