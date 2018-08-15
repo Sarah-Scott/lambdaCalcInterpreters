@@ -1,6 +1,8 @@
 import Control.Applicative
 import Control.Monad
 
+------------------------------------------------------------------------------------
+
 data Reader e a = Reader (e -> a)
 
 runR :: Reader e a -> e -> a
@@ -26,8 +28,42 @@ asks f = ask >>= \e -> (return (f e))
 local :: (e -> e') -> Reader e' t -> Reader e t
 local f r = ask >>= \e -> return (runR r (f e))
 
+------------------------------------------------------------------------------------
+
+newtype ReaderT r m a = ReaderT { runReaderT :: r -> m a }
+
+instance Monad m => Monad (ReaderT r m) where
+  return = liftReaderT . return
+  m >>= k = ReaderT $ \r -> do
+    a <- runReaderT m r
+    runReaderT (k a) r
+
+instance Applicative m => Applicative (ReaderT r m) where
+  pure = liftReaderT . pure
+  f <*> v = ReaderT $ \r -> runReaderT f r <*> runReaderT v r
+
+instance Functor m => Functor (ReaderT r m) where
+  fmap f = mapReaderT (fmap f)
+
+liftReaderT :: m a -> ReaderT r m a
+liftReaderT m = ReaderT (const m)
+
+mapReaderT :: (m a -> n b) -> ReaderT r m a -> ReaderT r n b
+mapReaderT f m = ReaderT $ f . runReaderT m
+
+askT :: (Monad m) => ReaderT r m r
+askT = ReaderT return
+
+localT :: (r -> r) -> ReaderT r m a -> ReaderT r m a
+localT = withReaderT
+
+withReaderT :: (r' -> r) -> ReaderT r m a -> ReaderT r' m a
+withReaderT f m = ReaderT $ runReaderT m . f
+
 lookupName :: Id -> Env -> APDT
 lookupName i e = case (lookup i e) of Just x -> x
+
+------------------------------------------------------------------------------------
 
 type Id = String
 
@@ -44,7 +80,9 @@ data APDT = VAR Id |
             Sig APDT Place |
             Kim Place Place |
             Usm Place |
-            Nonce Place
+            Nonce Place |
+            Lambda Id E APDT |
+            App APDT APDT
           deriving (Show, Eq)
 
 type Env = [(Id,APDT)] --the term must be evidence
@@ -59,11 +97,11 @@ isEvid ev = case ev of LN e0 e1 -> if (isEvid e0 && isEvid e1) then True else Fa
                        Nonce p -> True
                        _ -> False
 
---bindings will only be able to added to delta after lets or lambdas are in the language
-
+addVar :: Id -> APDT -> Env -> Env
+addVar i t env = (i,t):env
 
 --comma place will be necessary later on
-eval :: (APDT,Place) -> Reader Env (APDT,Place)
+eval :: (APDT,Place) -> ReaderT Env (Either String) (APDT,Place)
 eval (t,p) = case t of KIM q -> return (Kim q p, p)
                        USM -> return (Usm p, p)
                        LN t0 t1 ->
@@ -84,11 +122,33 @@ eval (t,p) = case t of KIM q -> return (Kim q p, p)
                          (t0',q') <- eval (t0,q)
                          return (t0',p)
                        VAR i -> do
-                         env <- ask
-                         return (lookupName i env, p)
+                         env <- askT
+                         let m = lookup i env
+                           in case m of Just v -> (return (v,p))    
+                                        _ -> liftReaderT $ Left "identifier does not exist in the environment"
+                       Lambda i e t -> return (Lambda i e t, p)
+                       App t0 t1 -> do
+                         (Lambda i e t, p0') <- eval (t0,p)
+                         (t1', p1') <- eval (t1,p)
+                         localT (addVar i t1') (eval (t,p))
+                       SIG -> liftReaderT $ Left "cannot sign here"
+                       Mt -> liftReaderT $ Left "cannot evaluate evidence"
+                       Sig e p0 -> liftReaderT $ Left "cannot evaluate evidence"
+                       Kim p0 p1 -> liftReaderT $ Left "cannot evaluate evidence"
+                       Usm p0 -> liftReaderT $ Left "cannot evaluate evidence"
+                       Nonce p0 -> liftReaderT $ Left "cannot evaluate evidence" 
 
-evaluate :: (APDT,Place) -> (APDT,Place)
-evaluate (t,p) = runR (eval (t,p)) [("x",Mt)]
+
+                                              
+                         
+
+runRead :: ReaderT r m a -> r -> m a
+runRead (ReaderT f) e = f e
+
+evaluate :: (APDT,Place) -> Either String (APDT,Place)
+evaluate (t,p) = runRead (eval (t,p)) []
+
+------------------------------------------------------------------------------------
 
 data E = SeqE E E |
          ParE E E |
@@ -125,8 +185,7 @@ typeOfTerm t = case t of Usm p -> return (U p)
                            else do
                              e0 <- typeOfTerm t0
                              e1 <- typeOfTerm t1
-                             return (SeqE e0 e1)
-                                        
+                             return (SeqE e0 e1)           
                          BR t0 t1 -> do
                            e0 <- typeOfTerm t0
                            e1 <- typeOfTerm t1
@@ -136,23 +195,40 @@ typeOfTerm t = case t of Usm p -> return (U p)
 getTypeOf :: APDT -> E
 getTypeOf t = runR (typeOfTerm t) [0]
 
+------------------------------------------------------------------------------------
+
 {-
 
 evaluate (LN (KIM 1) (USM), 0)
-  (LN (Kim 1 0) (Usm 0),0)
+  Right (LN (Kim 1 0) (Usm 0),0)
 
 evaluate (LN (KIM 1) (SIG), 0)
-  (LN (Kim 1 0) (Sig (Kim 1 0) 0),0)
+  Right (LN (Kim 1 0) (Sig (Kim 1 0) 0),0)
 
 evaluate (BR USM (KIM 1), 0)
-  (BR (Usm 0) (Kim 1 0),0)
+  Right (BR (Usm 0) (Kim 1 0),0)
 
 evaluate (AT 1 USM, 0)
-  (Usm 1,0)
+  Right (Usm 1,0)
 
-evaluate (LN (VAR "x") (USM),0)
-  (LN Mt (Usm 0),0)
------------------------------------------------------------------
+evaluate (App (Lambda "y" (K 1 0) (LN (VAR "y") (USM))) (KIM 1), 0)
+  Right (LN (Kim 1 0) (Usm 0),0)
+
+---
+
+evaluate (App (Lambda "y" (K 1 0) (LN (VAR "b") (USM))) (KIM 1), 0)
+  Left "identifier does not exist in the environment"
+
+evaluate (BR (KIM 1) (SIG), 0)
+  Left "cannot sign here"
+
+evaluate (LN (SIG) (USM), 0)
+  Left "cannot sign here"
+
+evaluate (BR Mt USM, 0)
+  Left "cannot evaluate evidence"
+
+------------------------------------------------------------------------------------
 
 getTypeOf (LN (AT 1 USM) USM)
   SeqE (U 1) (U 0)
