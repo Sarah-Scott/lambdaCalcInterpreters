@@ -1,6 +1,8 @@
 import Control.Applicative
 import Control.Monad
 
+------------------------------------------------------------------------------------
+
 data Reader e a = Reader (e -> a)
 
 runR :: Reader e a -> e -> a
@@ -26,70 +28,83 @@ asks f = ask >>= \e -> (return (f e))
 local :: (e -> e') -> Reader e' t -> Reader e t
 local f r = ask >>= \e -> return (runR r (f e))
 
+------------------------------------------------------------------------------------
+
+lookupName :: Id -> Env -> APDT
+lookupName i e = case (lookup i e) of Just x -> x
+
 type Id = String
 
-type Place = String
+type Place = Int
 
-data Term = Var Id |
-            Seq Term Term |
-            Par Term Term |
-            At Place Term |
+data APDT = VAR Id |
+            LN APDT APDT | --Linear (Sequential)
+            BR APDT APDT | --Branch (Parallel)
+            AT Place APDT |
             SIG |
             KIM Place |
             USM |
-            MT |
-            Sig Term Place |
+            Mt |
+            Sig APDT Place |
             Kim Place Place |
             Usm Place |
-            Nonce Place
+            Nonce Place |
+            Lambda Id E APDT |
+            App APDT APDT
           deriving (Show, Eq)
 
-type Env = [(Id,Term)] --the term must be evidence
+type Env = [(Id,APDT)] --the term must be evidence
 
-isEvid :: Term -> Bool
-isEvid ev = case ev of Seq e0 e1 -> if (isEvid e0 && isEvid e1) then True else False
-                       Par e0 e1 -> if (isEvid e0 && isEvid e1) then True else False
-                       MT -> True
+isEvid :: APDT -> Bool
+isEvid ev = case ev of LN e0 e1 -> if (isEvid e0 && isEvid e1) then True else False
+                       BR e0 e1 -> if (isEvid e0 && isEvid e1) then True else False
+                       Mt -> True
                        Sig e p -> if (isEvid e) then True else False
                        Kim p0 p1 -> True
                        Usm p -> True
                        Nonce p -> True
                        _ -> False
 
---is the triangle environment like bind and id??
---how do you add things to the environment??
+addVar :: Id -> APDT -> Env -> Env
+addVar i t env = (i,t):env
 
---where does empty and nonce evidence come in???
-
---stuff will only be able to added to delta aka triangle after lets or lambdas are in the language
-
---can SIG only be used in sequential operation?
---does SIG just duplicate the evidence, sign that, and leave the unsigned and signed in sequence??
---can SIG have an At applied to it?
-
---should parallel have an option or just arbitrarily choose one everytime?
-
---adding stuff to gamma will come later
-
---are static semantics the same as typechecking?
+--what would be a good example use of the lambda
+--adding the type for what the variable should be seems like too much work
 
 --comma place will be necessary later on
---the comma place seems a little repetitive
---the comma place isnt so bad after doing At
-eval1 :: (Term,Place) -> (Term,Place)
-eval1 (t,p) = case t of KIM q -> (Kim q p, p)
-                        USM -> (Usm p, p)
-                        Seq t0 t1 -> if (isEvid t0) then
-                                        (if (t1==SIG) then
-                                           (Seq t0 (Sig t0 p), p)
-                                         else (let (t1',p') = eval (t1,p) in (Seq t0 t1', p)))
-                                     else (let (t0',p') = eval (t0,p) in (Seq t0' t1, p))
-                        Par t0 t1 -> let (t0',p0) = eval (t0,p); (t1',p1) = eval (t1,p)
-                                      in (Par t0' t1', p)
-                        At q t0 -> let (t0',q') = eval (t0,q) in (t0',p)
+eval :: (APDT,Place) -> Reader Env (APDT,Place)
+eval (t,p) = case t of KIM q -> return (Kim q p, p)
+                       USM -> return (Usm p, p)
+                       LN t0 t1 ->
+                         if (isEvid t0)
+                         then (if (t1==SIG)
+                                then return (LN t0 (Sig t0 p), p)
+                               else do
+                                  (t1',p') <- eval (t1,p)
+                                  return (LN t0 t1', p))
+                         else do
+                           (t0',p') <- eval (t0,p)
+                           eval (LN t0' t1, p)                     
+                       BR t0 t1 -> do
+                         (t0',p0) <- eval (t0,p)
+                         (t1',p1) <- eval (t1,p)
+                         return (BR t0' t1', p)
+                       AT q t0 -> do
+                         (t0',q') <- eval (t0,q)
+                         return (t0',p)
+                       VAR i -> do
+                         env <- ask
+                         return (lookupName i env, p)
+                       Lambda i e t -> return (Lambda i e t, p)
+                       App t0 t1 -> do
+                         (Lambda i e t, p0') <- eval (t0,p)
+                         (t1', p1') <- eval (t1,p)
+                         local (addVar i t1') (eval (t,p))
+                         
+evaluate :: (APDT,Place) -> (APDT,Place)
+evaluate (t,p) = runR (eval (t,p)) []
 
-eval :: (Term,Place) -> (Term,Place)
-eval (t,p) = if (isEvid t) then (t,p) else (let (t',p') = eval1 (t,p) in eval (t',p'))
+------------------------------------------------------------------------------------
 
 data E = SeqE E E |
          ParE E E |
@@ -104,18 +119,8 @@ type Context = [Place]
 addPlace :: Place -> Context -> Context
 addPlace p c = p:c
 
---places should be numbers
 
---still have to add Var to eval
-
---names should match the coq doc
-
---I think that the type for SIG is wrong in the document
---how does it know/add to the context??
---I'm not sure about At
---At adds to the context
---context starts with home
-typeOfTerm :: Term -> Reader Context E
+typeOfTerm :: APDT -> Reader Context E
 typeOfTerm t = case t of Usm p -> return (U p)
                          Kim q p -> return (K q p)
                          Nonce p -> return (N p)
@@ -125,9 +130,9 @@ typeOfTerm t = case t of Usm p -> return (U p)
                          KIM q -> do
                            p:xs <- ask
                            return (K q p)  
-                         At p t0 -> do
+                         AT p t0 -> do
                            local (addPlace p) (typeOfTerm t0)
-                         Seq t0 t1 ->
+                         LN t0 t1 ->
                            if (t1==SIG)
                              then do
                               e0 <- typeOfTerm t0
@@ -136,34 +141,32 @@ typeOfTerm t = case t of Usm p -> return (U p)
                            else do
                              e0 <- typeOfTerm t0
                              e1 <- typeOfTerm t1
-                             return (SeqE e0 e1)
-                                        
-                         Par t0 t1 -> do
+                             return (SeqE e0 e1)         
+                         BR t0 t1 -> do
                            e0 <- typeOfTerm t0
                            e1 <- typeOfTerm t1
                            return (ParE e0 e1)
 
---will have home as the number zero
-getTypeOf :: Term -> E
-getTypeOf t = runR (typeOfTerm t) ["a"]
+--home is the number zero
+getTypeOf :: APDT -> E
+getTypeOf t = runR (typeOfTerm t) [0]
+
+------------------------------------------------------------------------------------
 
 {-
 
-eval (Seq (KIM "a") (USM), "x")
-  (Seq (Kim "a" "x") (Usm "x"),"x")
+evaluate (LN (KIM 1) (USM), 0)
+  (LN (Kim 1 0) (Usm 0),0)
 
-eval (Seq (KIM "a") (SIG), "x")
-  (Seq (Kim "a" "x") (Sig (Kim "a" "x") "x"),"x")
+evaluate (LN (KIM 1) (SIG), 0)
+  (LN (Kim 1 0) (Sig (Kim 1 0) 0),0)
 
-eval (Par USM (KIM "a"), "x")
-  (Par (Usm "x") (Kim "a" "x"),"x")
+evaluate (BR USM (KIM 1), 0)
+  (BR (Usm 0) (Kim 1 0),0)
 
-eval (At "b" USM, "x")
-  (Usm "b","x")
+evaluate (AT 1 USM, 0)
+  (Usm 1,0)
 
------------------------------------------------------------------
-
-getTypeOf (Seq (At "m" USM) USM)
-  SeqE (U "m") (U "a")
-
+evaluate (App (Lambda "y" (K 1 0) (LN (VAR "y") (USM))) (KIM 1), 0)
+  (LN (Kim 1 0) (Usm 0),0)
 -}
