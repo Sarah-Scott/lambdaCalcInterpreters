@@ -61,10 +61,10 @@ localT = withReaderT
 withReaderT :: (r' -> r) -> ReaderT r m a -> ReaderT r' m a
 withReaderT f m = ReaderT $ runReaderT m . f
 
-lookupName :: Id -> Env -> APDT
-lookupName i e = case (lookup i e) of Just x -> x
 
 ------------------------------------------------------------------------------------
+
+
 
 type Id = Char
 
@@ -82,7 +82,7 @@ data APDT = VAR Id |
             Kim Place Place |
             Usm Place |
             Nonce Place |
-            Lambda Id E APDT |
+            Lambda Id T APDT |
             App APDT APDT
           deriving (Show, Eq)
 
@@ -150,37 +150,47 @@ evaluate (t,p) = runRead (eval (t,p)) []
 
 ------------------------------------------------------------------------------------
 
-data E = SeqE E E |
-         ParE E E |
-         SigE E Place |
+data T = SeqE T T |
+         ParE T T |
+         SigE T Place |
          K Place Place |
          U Place |
-         N Place
+         N Place |
+         Func T T
        deriving (Show,Eq)
+
+type EnvE = [(Id,T)]
 
 type Context = [Place]
 
-addPlace :: Place -> Context -> Context
-addPlace p c = p:c
+addPlace :: Place -> (Context,EnvE) -> (Context,EnvE)
+addPlace p (c,e) = (p:c,e)
 
+addType :: Id -> T -> (Context,EnvE) -> (Context, EnvE)
+addType i t (c,e) = (c,(i,t):e)
 
-typeOfTerm :: APDT -> Reader Context E
+lookupType :: Id -> EnvE -> T
+lookupType i e = case (lookup i e) of Just x -> x
+
+--type checker needs error handling
+typeOfTerm :: APDT -> Reader (Context,EnvE) T
 typeOfTerm t = case t of Usm p -> return (U p)
                          Kim q p -> return (K q p)
                          Nonce p -> return (N p)
                          USM -> do
-                           p:xs <- ask
+                           (p:xs,e) <- ask
                            return (U p)
                          KIM q -> do
-                           p:xs <- ask
+                           (p:xs,e) <- ask
                            return (K q p)  
                          AT p t0 -> do
+                           (p0,e) <- ask
                            local (addPlace p) (typeOfTerm t0)
                          LN t0 t1 ->
                            if (t1==SIG)
                              then do
                               e0 <- typeOfTerm t0
-                              p:xs <- ask
+                              (p:xs,e) <- ask
                               return (SigE e0 p)
                            else do
                              e0 <- typeOfTerm t0
@@ -190,10 +200,22 @@ typeOfTerm t = case t of Usm p -> return (U p)
                            e0 <- typeOfTerm t0
                            e1 <- typeOfTerm t1
                            return (ParE e0 e1)
+                         VAR i -> do
+                           (c,e) <- ask
+                           let m = lookup i e
+                               in case m of Just v -> return v
+                         Lambda i e t -> do
+                           t' <- local (addType i e) (typeOfTerm t)
+                           return (Func e t')
+                         App t0 t1 -> do
+                           Func d r <- typeOfTerm t0
+                           return r
+                           
+                                  
 
---will have home as the number zero
-getTypeOf :: APDT -> E
-getTypeOf t = runR (typeOfTerm t) [0]
+--home is the number zero
+getTypeOf :: APDT -> T
+getTypeOf t = runR (typeOfTerm t) ([0],[])
 
 ------------------------------------------------------------------------------------
 
@@ -249,6 +271,7 @@ genUSM = do
 isRight :: Either String (APDT,Place) -> Bool
 isRight x = case x of Right t -> True
                       _ -> False
+
 {-
 
 
@@ -296,12 +319,12 @@ evaluate (BR USM (KIM 1), 0)
 evaluate (AT 1 USM, 0)
   Right (Usm 1,0)
 
-evaluate (App (Lambda "y" (K 1 0) (LN (VAR "y") (USM))) (KIM 1), 0)
+evaluate (App (Lambda 'y' (K 1 0) (LN (VAR 'y') (USM))) (KIM 1), 0)
   Right (LN (Kim 1 0) (Usm 0),0)
 
 ---
 
-evaluate (App (Lambda "y" (K 1 0) (LN (VAR "b") (USM))) (KIM 1), 0)
+evaluate (App (Lambda 'y' (K 1 0) (LN (VAR 'b') (USM))) (KIM 1), 0)
   Left "identifier does not exist in the environment"
 
 evaluate (BR (KIM 1) (SIG), 0)
@@ -320,5 +343,9 @@ getTypeOf (LN (AT 1 USM) USM)
 
 getTypeOf (LN (KIM 1) (SIG))
   SigE (K 1 0) 0
+
+getTypeOf (App (Lambda 'y' (K 1 0) (LN (VAR 'y') (USM))) (KIM 1))
+  SeqE (K 1 0) (U 0)
+
 
 -}
