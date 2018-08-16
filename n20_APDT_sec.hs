@@ -1,5 +1,6 @@
 import Control.Applicative
 import Control.Monad
+import Test.QuickCheck
 
 ------------------------------------------------------------------------------------
 
@@ -65,7 +66,7 @@ lookupName i e = case (lookup i e) of Just x -> x
 
 ------------------------------------------------------------------------------------
 
-type Id = String
+type Id = Char
 
 type Place = Int
 
@@ -138,7 +139,6 @@ eval (t,p) = case t of KIM q -> return (Kim q p, p)
                        Usm p0 -> liftReaderT $ Left "cannot evaluate evidence"
                        Nonce p0 -> liftReaderT $ Left "cannot evaluate evidence" 
 
-
                                               
                          
 
@@ -197,7 +197,92 @@ getTypeOf t = runR (typeOfTerm t) [0]
 
 ------------------------------------------------------------------------------------
 
+
+
+
+
+instance Arbitrary APDT where
+  arbitrary = sized $ \n -> genAPDT (rem n 10)
+
+genAPDT :: Int -> Gen APDT
+genAPDT n = case n of 0 -> do
+                        term <- oneof [genKIM, genUSM]
+                        return term
+                      _ -> do
+                        term <- oneof [genLN (n-1), genBR (n-1), genAT (n-1), genSIG (n-1), genKIM, genUSM]
+                        return term
+
+
+  
+
+
+genKIM = do
+  p <- choose (0,100)
+  return (KIM p)
+
+genBR n = do
+  t0 <- genAPDT n
+  t1 <- genAPDT n
+  return (BR t0 t1)
+
+genLN n = do
+  t0 <- genAPDT n
+  t1 <- genAPDT n
+  return (LN t0 t1)
+
+genSIG n = do
+  t <- genAPDT n
+  return (LN t SIG)
+
+genAT n = do
+  p <- choose (0,100)
+  t <- genAPDT n
+  return (AT p t)
+
+genUSM :: Gen APDT
+genUSM = do
+  return (USM)
+
+
+
+
+isRight :: Either String (APDT,Place) -> Bool
+isRight x = case x of Right t -> True
+                      _ -> False
 {-
+
+
+
+quickCheck (\x -> isRight (evaluate (x,0)))
+
+
+---
+
+
+    don't know how to generate APDT with variables
+
+genLambda n = do
+  i <- choose ('a','z')
+  t <- genAPDT n
+  return (App (Lambda i (getTypeOf t)
+
+
+
+---
+
+
+    caused quickcheck to fail
+
+genBAD n = do
+  t <- genAPDT n
+  return (BR t SIG)
+
+oneof [genLN (n-1), genBR (n-1), genAT (n-1), genSIG (n-1), genKIM, genUSM, genBAD (n-1)]
+
+
+------------------------------------------------------------------------------------
+
+
 
 evaluate (LN (KIM 1) (USM), 0)
   Right (LN (Kim 1 0) (Usm 0),0)
