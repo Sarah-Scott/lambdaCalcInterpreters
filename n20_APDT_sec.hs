@@ -101,7 +101,12 @@ isEvid ev = case ev of LN e0 e1 -> if (isEvid e0 && isEvid e1) then True else Fa
 addVar :: Id -> APDT -> Env -> Env
 addVar i t env = (i,t):env
 
---comma place will be necessary later on
+--lambdas will use debruijn indices for evaluation
+--the type being included in the lambda seems like overkill
+--what even is the point of the lambdas
+--lambdas can't even be used to parameterize the place
+--lambdas and ATs are terrible together  (see bottom of page comments)
+--does the first term in the App need to be a lambda term??
 eval :: (APDT,Place) -> ReaderT Env (Either String) (APDT,Place)
 eval (t,p) = case t of KIM q -> return (Kim q p, p)
                        USM -> return (Usm p, p)
@@ -166,31 +171,34 @@ type Context = [Place]
 addPlace :: Place -> (Context,EnvE) -> (Context,EnvE)
 addPlace p (c,e) = (p:c,e)
 
+
 addType :: Id -> T -> (Context,EnvE) -> (Context, EnvE)
 addType i t (c,e) = (c,(i,t):e)
 
 lookupType :: Id -> EnvE -> T
 lookupType i e = case (lookup i e) of Just x -> x
 
---type checker needs error handling
-typeOfTerm :: APDT -> Reader (Context,EnvE) T
+--I think evidence and terms need differentiated
+--should there be a type error if BR and LN have a combination of evidence and terms
+--what the what are the type safety properties
+typeOfTerm :: APDT -> ReaderT (Context,EnvE) (Either String) T
 typeOfTerm t = case t of Usm p -> return (U p)
                          Kim q p -> return (K q p)
                          Nonce p -> return (N p)
                          USM -> do
-                           (p:xs,e) <- ask
+                           (p:xs,e) <- askT
                            return (U p)
                          KIM q -> do
-                           (p:xs,e) <- ask
+                           (p:xs,e) <- askT
                            return (K q p)  
                          AT p t0 -> do
-                           (p0,e) <- ask
-                           local (addPlace p) (typeOfTerm t0)
+                           (p0,e) <- askT
+                           localT (addPlace p) (typeOfTerm t0)
                          LN t0 t1 ->
                            if (t1==SIG)
                              then do
                               e0 <- typeOfTerm t0
-                              (p:xs,e) <- ask
+                              (p:xs,e) <- askT
                               return (SigE e0 p)
                            else do
                              e0 <- typeOfTerm t0
@@ -201,21 +209,21 @@ typeOfTerm t = case t of Usm p -> return (U p)
                            e1 <- typeOfTerm t1
                            return (ParE e0 e1)
                          VAR i -> do
-                           (c,e) <- ask
+                           (c,e) <- askT
                            let m = lookup i e
                                in case m of Just v -> return v
                          Lambda i e t -> do
-                           t' <- local (addType i e) (typeOfTerm t)
+                           t' <- localT (addType i e) (typeOfTerm t)
                            return (Func e t')
                          App t0 t1 -> do
                            Func d r <- typeOfTerm t0
-                           return r
-                           
+                           t1' <- typeOfTerm t1
+                           if (t1'==d) then (return r) else (liftReaderT $ Left "type error in App")
+                         SIG -> liftReaderT $ Left "type error in SIG"
                                   
 
---home is the number zero
-getTypeOf :: APDT -> T
-getTypeOf t = runR (typeOfTerm t) ([0],[])
+getTypeOf :: APDT -> Either String T
+getTypeOf t = runRead (typeOfTerm t) ([0],[])
 
 ------------------------------------------------------------------------------------
 
@@ -272,29 +280,39 @@ isRight :: Either String (APDT,Place) -> Bool
 isRight x = case x of Right t -> True
                       _ -> False
 
+ 
 {-
 
+   AT and lambdas together make zero sense
+   is the type of USM in this first case supposed to be (U 1) or (U 0)?????
+   --CALL BY VALUE IS THE PROBLEM
 
+evaluate (App (Lambda 'x' (U 1) (AT 1 (VAR 'x'))) (USM),0)
+  Right (Usm 0,0)
+evaluate (App (Lambda 'x' (U 0) (AT 1 (VAR 'x'))) (USM),0)
+  Right (Usm 0,0)
 
-quickCheck (\x -> isRight (evaluate (x,0)))
-
+evaluate (App (Lambda 'y' (U 0) (LN (AT 1 (VAR 'y')) (VAR 'y'))) (USM),0)
+  Right (LN (Usm 0) (Usm 0),0)
 
 ---
 
+   not sure how to use quickcheck to prove that evaluation is correct
+
+quickCheck (\x -> isRight (evaluate (x,0)))
+
+---
 
     don't know how to generate APDT with variables
 
 genLambda n = do
   i <- choose ('a','z')
   t <- genAPDT n
-  return (App (Lambda i (getTypeOf t)
-
-
+  return (App (Lambda i (getTypeOf t) _____ ) t)
 
 ---
 
-
-    caused quickcheck to fail
+    causes quickcheck to fail (which it should)
 
 genBAD n = do
   t <- genAPDT n
@@ -303,49 +321,62 @@ genBAD n = do
 oneof [genLN (n-1), genBR (n-1), genAT (n-1), genSIG (n-1), genKIM, genUSM, genBAD (n-1)]
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+make values separate from terms with a constructor
+values should evaluate to themselves
+
+
+
+
+
+
+
+
+
 ------------------------------------------------------------------------------------
-
-
 
 evaluate (LN (KIM 1) (USM), 0)
   Right (LN (Kim 1 0) (Usm 0),0)
-
 evaluate (LN (KIM 1) (SIG), 0)
   Right (LN (Kim 1 0) (Sig (Kim 1 0) 0),0)
-
 evaluate (BR USM (KIM 1), 0)
   Right (BR (Usm 0) (Kim 1 0),0)
-
 evaluate (AT 1 USM, 0)
   Right (Usm 1,0)
-
 evaluate (App (Lambda 'y' (K 1 0) (LN (VAR 'y') (USM))) (KIM 1), 0)
   Right (LN (Kim 1 0) (Usm 0),0)
-
+evaluate (LN (AT 1 USM) (USM), 0)
+  Right (LN (Usm 1) (Usm 0),0)
 ---
-
 evaluate (App (Lambda 'y' (K 1 0) (LN (VAR 'b') (USM))) (KIM 1), 0)
   Left "identifier does not exist in the environment"
-
 evaluate (BR (KIM 1) (SIG), 0)
   Left "cannot sign here"
-
 evaluate (LN (SIG) (USM), 0)
   Left "cannot sign here"
-
 evaluate (BR Mt USM, 0)
   Left "cannot evaluate evidence"
-
 ------------------------------------------------------------------------------------
-
 getTypeOf (LN (AT 1 USM) USM)
-  SeqE (U 1) (U 0)
-
+  Right SeqE (U 1) (U 0)
 getTypeOf (LN (KIM 1) (SIG))
-  SigE (K 1 0) 0
-
+  Right SigE (K 1 0) 0
 getTypeOf (App (Lambda 'y' (K 1 0) (LN (VAR 'y') (USM))) (KIM 1))
-  SeqE (K 1 0) (U 0)
-
-
+  Right SeqE (K 1 0) (U 0)
+---
+getTypeOf (BR USM SIG)
+  Left "type error in SIG"
+getTypeOf (App (Lambda 'y' (U 0) (BR (VAR 'y') (KIM 1))) (KIM 1))
+  Left "type error in App"
 -}
