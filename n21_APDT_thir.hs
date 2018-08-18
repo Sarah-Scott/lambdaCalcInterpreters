@@ -101,7 +101,9 @@ getVal :: APDT -> Val
 getVal t = case t of V v -> v
 
 addVar :: Id -> Val -> Env -> Env
-addVar i t env = (i,t):env--lambdas will use debruijn indices for evaluation
+addVar i t env = (i,t):env
+
+--lambdas will use debruijn indices for evaluation
 --the type being included in the lambda seems like overkill
 --does the first term in the App need to be a lambda term??
 eval :: (APDT,Place) -> ReaderT Env (Either String) (APDT,Place)
@@ -226,12 +228,14 @@ data T = SeqE T T |
 instance Arbitrary APDT where
  arbitrary = sized $ \n -> genAPDT (rem n 10)
 
+
+--Lambda, VAR, App are not here
 genAPDT :: Int -> Gen APDT
 genAPDT n = case n of 0 -> do
                         term <- oneof [genKIM, genUSM]
                         return term
                       _ -> do
-                        term <- oneof [genLN (n-1), genBR (n-1), genAT (n-1), genSIG (n-1), genKIM, genUSM]
+                        term <- oneof [genLN (n-1), genBR (n-1), genAT (n-1), genSIG (n-1), genKIM, genUSM, genVal (n-1)]
                         return term
 
 
@@ -266,6 +270,46 @@ genUSM = do
   return (USM)
 
 
+--SIG term can only be in the second spot of LN, so what's the scoop on Sig value??
+
+genVal :: Int -> Gen APDT
+genVal n = case n of 0 -> do
+                       term <- oneof [genKim, genUsm, genMt, genNonce]
+                       return term
+                     _ -> do
+                       term <- oneof [genKim, genUsm, genSeqV (n-1), genParV (n-1), genMt, genNonce]
+                       return term
+
+
+genUsm = do
+  p <- choose (0,100)
+  return (V (Usm p))
+
+genKim = do
+  p0 <- choose (0,100)
+  p1 <- choose (0,100)
+  return (V (Kim p0 p1))
+
+genSeqV n = do
+  V t0 <- genVal n
+  V t1 <- genVal n
+  return (V (SeqV t0 t1))
+
+genParV n = do
+  V t0 <- genVal n
+  V t1 <- genVal n
+  return (V (ParV t0 t1))
+
+genMt :: Gen APDT
+genMt = do
+  return (V Mt)
+
+genNonce = do
+  p <- choose (0,100)
+  return (V (Nonce p))
+
+
+
 
 
 isRight :: Either String (APDT,Place) -> Bool
@@ -279,6 +323,7 @@ isRight x = case x of Right t -> True
    compare small step and big step using quickcheck
 
 quickCheck (\x -> isRight (evaluate (x,0)))
+quickCheckWith stdArgs {maxSuccess=500} (\x -> isRight (evaluate (x,0)))
 
 ---
 
