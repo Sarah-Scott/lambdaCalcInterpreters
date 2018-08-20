@@ -71,8 +71,8 @@ type Id = Char
 type Place = Int
 
 data APDT = VAR Id |
-            LN APDT APDT | --Linear (Sequential)
-            BR APDT APDT | --Branch (Parallel)
+            LN APDT APDT |
+            BR APDT APDT |
             AT Place APDT |
             SIG |
             KIM Place |
@@ -104,7 +104,6 @@ addVar :: Id -> Val -> Env -> Env
 addVar i t env = (i,t):env
 
 --lambdas will use debruijn indices for evaluation
---the type being included in the lambda seems like overkill
 --does the first term in the App need to be a lambda term??
 eval :: (APDT,Place) -> ReaderT Env (Either String) (APDT,Place)
 eval (t,p) = case t of KIM q -> return (V (Kim q p), p)
@@ -136,7 +135,7 @@ eval (t,p) = case t of KIM q -> return (V (Kim q p), p)
                          (V t1', p1') <- eval (t1,p)
                          localT (addVar i t1') (eval (t,p))
                        SIG -> liftReaderT $ Left "cannot sign here"
-                       V t -> return (V t, p)
+                       V x -> return (V x, p)
 
                                               
                          
@@ -146,6 +145,31 @@ runRead (ReaderT f) e = f e
 
 evaluate :: (APDT,Place) -> Either String (APDT,Place)
 evaluate (t,p) = runRead (eval (t,p)) []
+
+------------------------------------------------------------------------------------
+
+
+step :: (APDT,Place) -> Reader Env (APDT,Place)
+step (t,p) = case t of USM ->  return (V (Usm p), p)
+                       V x -> return (V x, p)
+                       BR (V x0) (V x1) -> return (V (ParV x0 x1), p)
+                       BR (V x0) t1 -> let (t1',p') = (runR (step (t1,p)) []) in return (BR (V x0) t1', p)
+                       BR t0 t1 -> let (t0',p') = (runR (step (t0,p)) []) in return (BR t0' t1, p)
+                       KIM q -> return (V (Kim q p), p)
+                       LN (V x0) (V x1) -> return (V (SeqV x0 x1), p)
+                       LN (V x0) SIG -> return (V (SeqV x0 (Sig x0 p)), p)
+                       LN (V x0) t1 -> let (t1',p') = (runR (step (t1,p)) []) in return (LN (V x0) t1', p)
+                       LN t0 t1 -> let (t0',p') = (runR (step (t0,p)) []) in return (LN t0' t1, p)
+                       AT q (V x) -> return (V x, p)
+                       AT q t0 -> let (t0',q') = (runR (step (t0,q)) []) in return (AT q t0', p)
+
+
+stepping :: (APDT,Place) -> (APDT,Place)
+stepping a = let (t,p) = (runR (step a) []) in (if (isEvid t) then (t,p) else (stepping (t,p)))
+
+
+
+
 
 ------------------------------------------------------------------------------------
 
@@ -176,7 +200,8 @@ data T = SeqE T T |
 -- --should there be a type error if BR and LN have a combination of evidence and terms
 -- --what the what are the type safety properties
 -- typeOfTerm :: APDT -> ReaderT (Context,EnvE) (Either String) T
--- typeOfTerm t = case t of Usm p -> return (U p)
+-- typeOfTerm t = case t of Usm p -> return (U p)if (isEvid t1)
+--                         then 
 --                          Kim q p -> return (K q p)
 --                          Nonce p -> return (N p)
 --                          USM -> do
@@ -311,6 +336,13 @@ genNonce = do
 
 
 
+removeRight :: Either String (APDT,Place) -> (APDT,Place)
+removeRight x = case x of Right t -> t
+                          _ -> error "you got a left in here"
+
+removeRightAndPlace :: Either String (APDT,Place) -> APDT
+removeRightAndPlace x = case x of Right (t,p) -> t
+                                  _ -> error "you got a left in here"
 
 isRight :: Either String (APDT,Place) -> Bool
 isRight x = case x of Right t -> True
@@ -320,8 +352,15 @@ isRight x = case x of Right t -> True
 {-
 
 
-   compare small step and big step using quickcheck
+   evaluate (big step) and stepping (small step) are the same
+quickCheck (\x -> ((removeRight (evaluate (x,0))) == (stepping (x,0))))
+quickCheckWith stdArgs {maxSuccess=500} (\x -> ((removeRight (evaluate (x,0))) == (stepping (x,0))))
 
+   evaluate results in a value
+quickCheck (\x -> (isEvid (removeRightAndPlace (evaluate (x,0)))))
+quickCheckWith stdArgs {maxSuccess=500} (\x -> (isEvid (removeRightAndPlace (evaluate (x,0)))))
+
+   evaluate does not result in any errors
 quickCheck (\x -> isRight (evaluate (x,0)))
 quickCheckWith stdArgs {maxSuccess=500} (\x -> isRight (evaluate (x,0)))
 
