@@ -73,7 +73,7 @@ type Place = Int
 data APDT = VAR Id |
             LN APDT APDT |
             BR APDT APDT |
-            AT Place APDT |
+            AT APDT APDT |
             SIG |
             KIM Place |
             USM |
@@ -82,14 +82,16 @@ data APDT = VAR Id |
             V Val
           deriving (Show, Eq)
 
---what the heck is the deal with place?
+--added a closure (might be bad) ??????
 data Val =  Mt |
             Sig Val Place |
             Kim Place Place |
             Usm Place |
             Nonce Place |
             SeqV Val Val |
-            ParV Val Val
+            ParV Val Val |
+            Pl Place |
+            ClosureV Id APDT Env
          deriving (Show,Eq)
 
 type Env = [(Id,Val)] 
@@ -104,8 +106,11 @@ getVal t = case t of V v -> v
 addVar :: Id -> Val -> Env -> Env
 addVar i t env = (i,t):env
 
---do I need to convert names to debruijn numbers???
---does the first term in the App need to be a lambda term??
+
+--change SIG (maybe if I feel like it)
+--quickcheck generate lambdas within lambdas (list of identifiers that could be used maybe)
+--debruijn converter needed (impossible)
+--quickcheck the old debruijn indices
 eval :: (APDT,Place) -> ReaderT Env (Either String) (APDT,Place)
 eval (t,p) = case t of KIM q -> return (V (Kim q p), p)
                        USM -> return (V (Usm p), p)
@@ -123,23 +128,27 @@ eval (t,p) = case t of KIM q -> return (V (Kim q p), p)
                          (t1',p1) <- eval (t1,p)
                          return (V (ParV (getVal t0') (getVal t1')), p)
                        AT q t0 -> do
-                         (t0',q') <- eval (t0,q)
+                         (V (Pl r),p') <- eval (q,p)
+                         (t0',r') <- eval (t0,r)
                          return (t0',p)
                        VAR i -> do
                          env <- askT
                          let m = lookup i env
                            in case m of Just v -> (return (V v,p))    
                                         _ -> liftReaderT $ Left "identifier does not exist in the environment"
-                       Lambda i e t0 -> return (Lambda i e t0, p)
+                       Lambda i e t0 -> do
+                         env <- askT
+                         return (V (ClosureV i t0 env), p)
                        App t0 t1 -> do
-                         (Lambda i e t0', p0') <- eval (t0,p)
+                         (V (ClosureV i t0 e), p0') <- eval (t0,p)
                          (V t1', p1') <- eval (t1,p)
-                         localT (addVar i t1') (eval (t0',p))
+                         localT (useClosure i t1' e) (eval (t0, p))
                        SIG -> liftReaderT $ Left "cannot sign here"
                        V x -> return (V x, p)
 
                                               
-                         
+useClosure :: Id -> Val -> Env -> Env -> Env
+useClosure i t e _ = (i,t):e
 
 runRead :: ReaderT r m a -> r -> m a
 runRead (ReaderT f) e = f e
@@ -149,26 +158,39 @@ evaluate (t,p) = runRead (eval (t,p)) []
 
 ------------------------------------------------------------------------------------
 
---needs lambdas
-step :: (APDT,Place) -> Reader Env (APDT,Place)
-step (t,p) = case t of USM ->  return (V (Usm p), p)
-                       V x -> return (V x, p)
-                       BR (V x0) (V x1) -> return (V (ParV x0 x1), p)
-                       BR (V x0) t1 -> let (t1',p') = (runR (step (t1,p)) []) in return (BR (V x0) t1', p)
-                       BR t0 t1 -> let (t0',p') = (runR (step (t0,p)) []) in return (BR t0' t1, p)
-                       KIM q -> return (V (Kim q p), p)
-                       LN (V x0) (V x1) -> return (V (SeqV x0 x1), p)
-                       LN (V x0) SIG -> return (V (SeqV x0 (Sig x0 p)), p)
-                       LN (V x0) t1 -> let (t1',p') = (runR (step (t1,p)) []) in return (LN (V x0) t1', p)
-                       LN t0 t1 -> let (t0',p') = (runR (step (t0,p)) []) in return (LN t0' t1, p)
-                       AT q (V x) -> return (V x, p)
-                       AT q t0 -> let (t0',q') = (runR (step (t0,q)) []) in return (AT q t0', p)
-
-
 stepping :: (APDT,Place) -> (APDT,Place)
-stepping a = let (t,p) = (runR (step a) []) in (if (isEvid t) then (t,p) else (stepping (t,p)))
+stepping a = let (t,p) = (step a) in (if (isEvid t) then (t,p) else (stepping (t,p)))
 
+subst :: Id -> APDT -> APDT -> APDT
+subst i v t = case t of V x -> V x
+                        LN t0 t1 -> LN (subst i v t0) (subst i v t1)
+                        USM -> USM
+                        VAR i' -> if (i==i') then v else (VAR i')
+                        App t0 t1 -> App (subst i v t0) (subst i v t1)
+                        Lambda i' e t0 -> Lambda i' e (subst i v t0)
+                        KIM q -> KIM q
+                        BR t0 t1 -> BR (subst i v t0) (subst i v t1)
+                        AT q t0 -> AT (subst i v q) (subst i v t0)
+                        SIG -> SIG
 
+step :: (APDT,Place) -> (APDT,Place)
+step (t,p) = case t of Lambda i e t0 -> (Lambda i e t0,p)
+                       App (Lambda i e t0) (V t1) -> (subst i (V t1) t0, p)
+                       App (Lambda i e t0) t1 -> let (t1',p') = step (t1,p) in (App (Lambda i e t0) t1', p)
+                       VAR i -> (VAR i, p)
+                       USM -> (V (Usm p), p)
+                       V x -> (V x, p)
+                       LN (V x0) (V x1) -> (V (SeqV x0 x1), p)
+                       LN (V x0) SIG -> (V (SeqV x0 (Sig x0 p)), p)
+                       LN (V x0) t1 -> let (t1',p') = step (t1,p) in (LN (V x0) t1', p)
+                       LN t0 t1 -> let (t0',p') = step (t0,p) in (LN t0' t1, p)
+                       KIM q -> (V (Kim q p), p)
+                       BR (V x0) (V x1) -> (V (ParV x0 x1), p)
+                       BR (V x0) t1 -> let (t1',p') = (step (t1,p)) in (BR (V x0) t1', p)
+                       BR t0 t1 -> let (t0',p') = (step (t0,p)) in (BR t0' t1, p)
+                       AT q (V x) -> (V x, p)
+                       AT (V (Pl q)) t0 -> let (t0',q') = (step (t0,q)) in (AT (V (Pl q)) t0', p)
+                       AT q t0 -> let (r,p') = (step (q,p)) in (AT r t0, p)
 
 
 
@@ -218,6 +240,8 @@ getTypeOf t = runRead (typeOfTerm t) ([0],[])
 -- ------------------------------------------------------------------------------------
 
 
+--instance Arbitrary APDT where
+-- arbitrary = sized $ \n -> genLambdaApp (rem n 10)
 
 
 
@@ -225,13 +249,12 @@ instance Arbitrary APDT where
  arbitrary = sized $ \n -> genAPDT (rem n 10)
 
 
---Lambda, VAR, App are not here
 genAPDT :: Int -> Gen APDT
 genAPDT n = case n of 0 -> do
                         term <- oneof [genKIM, genUSM]
                         return term
                       _ -> do
-                        term <- oneof [genLN (n-1), genBR (n-1), genAT (n-1), genSIG (n-1), genKIM, genUSM, genVal (n-1)]
+                        term <- oneof [genLN (n-1), genBR (n-1), genAT (n-1), genSIG (n-1), genKIM, genUSM, genVal (n-1), genLambdaApp (n-1)]
                         return term
 
 
@@ -259,14 +282,15 @@ genSIG n = do
 genAT n = do
   p <- choose (0,100)
   t <- genAPDT n
-  return (AT p t)
+  return (AT (V (Pl p)) t)
 
 genUSM :: Gen APDT
 genUSM = do
   return (USM)
 
 
---SIG term can only be in the second spot of LN, so what's the scoop on Sig value??
+
+
 
 genVal :: Int -> Gen APDT
 genVal n = case n of 0 -> do
@@ -307,6 +331,40 @@ genNonce = do
 
 
 
+genLambdaApp n = do
+  i <- choose ('a','z')
+  t0 <- genAPDTVAR n i
+  t1 <- genAPDT n
+  return (App (Lambda i MEAS t0) t1)
+
+genVAR :: Char -> Gen APDT
+genVAR i = return (VAR i)
+
+genLNVAR n i = do
+  t0 <- genAPDTVAR n i
+  t1 <- genAPDTVAR n i
+  return (LN t0 t1)
+
+genBRVAR n i = do
+  t0 <- genAPDTVAR n i
+  t1 <- genAPDTVAR n i
+  return (BR t0 t1)
+
+
+genSIGVAR n i = do
+  t <- genAPDTVAR n i
+  return (LN t SIG)
+
+genAPDTVAR :: Int -> Char -> Gen APDT
+genAPDTVAR n i = case n of 0 -> do
+                             term <- oneof [genKIM, genUSM, genVAR i]
+                             return term
+                           _ -> do
+                             term <- oneof [genLNVAR (n-1) i, genBRVAR (n-1) i, genSIGVAR (n-1) i, genVAR i, genKIM, genUSM]
+                             return term
+
+
+
 removeRight :: Either String (APDT,Place) -> (APDT,Place)
 removeRight x = case x of Right t -> t
                           _ -> error "you got a left in here"
@@ -323,25 +381,20 @@ isRight x = case x of Right t -> True
 {-
 
 
+
+
    evaluate (big step) and stepping (small step) are the same
 quickCheck (\x -> ((removeRight (evaluate (x,0))) == (stepping (x,0))))
-quickCheckWith stdArgs {maxSuccess=500} (\x -> ((removeRight (evaluate (x,0))) == (stepping (x,0))))
+quickCheckWith stdArgs {maxSuccess=5000} (\x -> ((removeRight (evaluate (x,0))) == (stepping (x,0))))
 
    evaluate results in a value
 quickCheck (\x -> (isEvid (removeRightAndPlace (evaluate (x,0)))))
-quickCheckWith stdArgs {maxSuccess=500} (\x -> (isEvid (removeRightAndPlace (evaluate (x,0)))))
+quickCheckWith stdArgs {maxSuccess=5000} (\x -> (isEvid (removeRightAndPlace (evaluate (x,0)))))
 
    evaluate does not result in any errors
 quickCheck (\x -> isRight (evaluate (x,0)))
-quickCheckWith stdArgs {maxSuccess=500} (\x -> isRight (evaluate (x,0)))
+quickCheckWith stdArgs {maxSuccess=5000} (\x -> isRight (evaluate (x,0)))
 
----
-
-    don't know how to generate APDT with variables
-genLambda n = do
-  i <- choose ('a','z')
-  t <- genAPDT n
-  return (App (Lambda i (getTypeOf t) _____ ) t)
 
 ---
 
@@ -349,7 +402,6 @@ genLambda n = do
 genBAD n = do
   t <- genAPDT n
   return (BR t SIG)
-oneof [genLN (n-1), genBR (n-1), genAT (n-1), genSIG (n-1), genKIM, genUSM, genBAD (n-1)]
 quickCheck (\x -> isRight (evaluate (x,0)))
 
 
@@ -371,6 +423,10 @@ evaluate (LN (BR USM USM) USM,0)
   Right (V (SeqV (ParV (Usm 0) (Usm 0)) (Usm 0)),0)
 evaluate (BR (V (Usm 0)) USM, 0)
   Right (V (ParV (Usm 0) (Usm 0)),0)
+evaluate (App (Lambda 'y' MEAS (App (Lambda 'x' MEAS (LN (VAR 'x') (VAR 'y'))) (BR USM (KIM 1)))) (KIM 1),0)
+  Right (V (SeqV (ParV (Usm 0) (Kim 1 0)) (Kim 1 0)),0)
+evaluate (App (Lambda 'y' MEAS (App (Lambda 'x' MEAS (LN (VAR 'x') (VAR 'y'))) (USM))) (KIM 1),0)
+  Right (V (SeqV (Usm 0) (Kim 1 0)),0)
 ---
 evaluate (App (Lambda 'y' (MEAS) (LN (VAR 'b') (USM))) (KIM 1), 0)
   Left "identifier does not exist in the environment"
