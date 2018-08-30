@@ -83,6 +83,7 @@ data APDT = VAR Id |
             USM |
             Lambda Id T APDT |
             App APDT APDT |
+            NONCE |
             V Val
           deriving (Show, Eq)
 
@@ -148,6 +149,7 @@ eval (t,p) = case t of KIM q -> return (V (Kim q p), p)
                          (V t1', p1') <- eval (t1,p)
                          localT (useClosure i t1' e) (eval (t0, p))
                        SIG -> liftReaderT $ Left "cannot sign here"
+                       NONCE -> return (V (Nonce p), p)
                        V x -> return (V x, p)
 
                                               
@@ -173,6 +175,7 @@ data Debruijn = VARD Int |
                 SIGD |
                 KIMD Place |
                 USMD |
+                NONCED |
                 VD Val
               deriving (Show,Eq)
 
@@ -203,6 +206,7 @@ eval1D (t,p) = case t of AppD (LambdaD t12) (VD v2) -> (termSubstTop (VD v2) t12
                          ATD q (VD x) -> (VD x, p)
                          ATD (VD (Pl q)) t0 -> let (t0',q') = (eval1D (t0,q)) in (ATD (VD (Pl q)) t0', p)
                          ATD q t0 -> let (r,p') = (eval1D (q,p)) in (ATD r t0, p)
+                         NONCED -> (VD (Nonce p), p)
                          
 
 termShift :: Int -> Int -> Debruijn -> Debruijn
@@ -236,6 +240,7 @@ db indices t = case t of VAR s -> let Just x = (lookup s indices) in (VARD x)
                          Lambda i e t0 -> let l = map add_one (deleteAssoc (==) i indices) in LambdaD (db ((i,0):l) t0)
                          App t0 t1 -> AppD (db indices t0) (db indices t1)
                          USM -> USMD
+                         NONCE -> NONCED
                          KIM q -> KIMD q
                          LN t0 t1 -> LND (db indices t0) (db indices t1)
                          BR t0 t1 -> BRD (db indices t0) (db indices t1)
@@ -292,6 +297,7 @@ subst i v t = case t of V x -> V x
                         BR t0 t1 -> BR (subst i v t0) (subst i v t1)
                         AT q t0 -> AT (subst i v q) (subst i v t0)
                         SIG -> SIG
+                        NONCE -> NONCE
 
 step :: (APDT,Place) -> (APDT,Place)
 step (t,p) = case t of Lambda i e t0 -> (Lambda i e t0,p)
@@ -311,6 +317,7 @@ step (t,p) = case t of Lambda i e t0 -> (Lambda i e t0,p)
                        AT q (V x) -> (V x, p)
                        AT (V (Pl q)) t0 -> let (t0',q') = (step (t0,q)) in (AT (V (Pl q)) t0', p)
                        AT q t0 -> let (r,p') = (step (q,p)) in (AT r t0, p)
+                       NONCE -> (V (Nonce p),p)
 
 
 
@@ -386,15 +393,16 @@ instance Arbitrary APDT where
 
 genAPDT :: Int -> Gen APDT
 genAPDT n = case n of 0 -> do
-                        term <- oneof [genKIM, genUSM]
+                        term <- oneof [genKIM, genUSM, genNONCE]
                         return term
                       _ -> do
-                        term <- oneof [genLN (n-1), genBR (n-1), genAT (n-1), genSIG (n-1), genKIM, genUSM, genVal (n-1), genLambdaApp (n-1) [], genLambdaApp (n-1) [], genLambdaApp (n-1) [], genLambdaApp (n-1) []]
+                        term <- oneof [genLN (n-1), genBR (n-1), genAT (n-1), genSIG (n-1), genKIM, genUSM, genNONCE, genVal (n-1), genLambdaApp (n-1) [], genLambdaApp (n-1) [], genLambdaApp (n-1) [], genLambdaApp (n-1) []]
                         return term
 
 
-  
-
+genNONCE :: Gen APDT
+genNONCE = do
+  return (NONCE)
 
 genKIM = do
   p <- choose (0,100)
