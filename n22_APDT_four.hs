@@ -65,6 +65,9 @@ withReaderT f m = ReaderT $ runReaderT m . f
 
 ------------------------------------------------------------------------------------
 
+--add comments with source information
+
+
 
 
 type Id = Char
@@ -160,8 +163,7 @@ evaluate (t,p) = runRead (eval (t,p)) []
 
 ------------------------------------------------------------------------------------
 
---add comments with source information
-
+--this may need error handling
 data Debruijn = VARD Int |
                 LambdaD Debruijn |
                 AppD Debruijn Debruijn |
@@ -275,6 +277,7 @@ combine as bs = case as of x:xs -> case bs of y:ys -> (x,y):(combine xs ys)
 
 ------------------------------------------------------------------------------------
 
+--add error handling (Either monad)
 stepping :: (APDT,Place) -> (APDT,Place)
 stepping a = let (t,p) = (step a) in (if (isEvid t) then (t,p) else (stepping (t,p)))
 
@@ -326,24 +329,44 @@ type Context = [Place]
 addType :: Id -> T -> (Context,EnvE) -> (Context, EnvE)
 addType i t (c,e) = (c,(i,t):e)
 
---missing several things
+
 typeOfTerm :: APDT -> ReaderT (Context,EnvE) (Either String) T
-typeOfTerm t = case t of USM -> return MEAS
+typeOfTerm t = case t of USM ->  return MEAS
                          KIM q -> return MEAS
                          VAR i -> do
                            (c,e) <- askT
                            let m = lookup i e
                                in case m of Just v -> return v
+                                            _ -> liftReaderT $ Left "type error in VAR"
                          Lambda i e t0 -> do
                            t' <- localT (addType i e) (typeOfTerm t0)
                            return (Func e t')
                          App t0 t1 -> do
-                           Func d r <- typeOfTerm t0
-                           t1' <- typeOfTerm t1
-                           if (t1'==d) then (return r) else (liftReaderT $ Left "type error in App")
+                           f <- typeOfTerm t0
+                           case f of Func d r -> do
+                                       t1' <- typeOfTerm t1
+                                       if (t1'==d) then (return r) else (liftReaderT $ Left "type error in App")
+                                     _ -> liftReaderT $ Left "type error in App"
                          V (Pl p) -> return (PLACE p)
-                         
- 
+                         V v -> return MEAS
+                         BR t0 t1 -> do
+                           t0' <- typeOfTerm t0
+                           t1' <- typeOfTerm t1
+                           if (t0'==MEAS && t1'==MEAS) then (return MEAS) else (liftReaderT $ Left "type error in BR")
+                         LN t0 SIG -> do
+                           t0' <- typeOfTerm t0
+                           if (t0'==MEAS) then (return MEAS) else (liftReaderT $ Left "type error in SIG")
+                         LN t0 t1 -> do
+                           t0' <- typeOfTerm t0
+                           t1' <- typeOfTerm t1
+                           if (t0'==MEAS && t1'==MEAS) then (return MEAS) else (liftReaderT $ Left "type error in LN")
+                         AT q t0 -> do
+                           q' <- typeOfTerm q
+                           t0 <- typeOfTerm t0
+                           case q' of PLACE p -> if (t0==MEAS) then (return MEAS) else (liftReaderT $ Left "type error in AT")
+                                      _ -> liftReaderT $ Left "type error in AT"
+                         SIG -> liftReaderT $ Left "type error in SIG"
+                                                                             
                                   
 
 getTypeOf :: APDT -> Either String T
@@ -355,9 +378,10 @@ getTypeOf t = runRead (typeOfTerm t) ([0],[])
 
 
 
-{-
+--make the number bigger to generate longer terms
 instance Arbitrary APDT where
- arbitrary = sized $ \n -> genAPDT (rem n 10)
+ arbitrary = sized $ \n -> genAPDT (rem n 20)
+
 
 
 genAPDT :: Int -> Gen APDT
@@ -365,7 +389,7 @@ genAPDT n = case n of 0 -> do
                         term <- oneof [genKIM, genUSM]
                         return term
                       _ -> do
-                        term <- oneof [genLN (n-1), genBR (n-1), genAT (n-1), genSIG (n-1), genKIM, genUSM, genVal (n-1), genLambdaApp (n-1)]
+                        term <- oneof [genLN (n-1), genBR (n-1), genAT (n-1), genSIG (n-1), genKIM, genUSM, genVal (n-1), genLambdaApp (n-1) [], genLambdaApp (n-1) [], genLambdaApp (n-1) [], genLambdaApp (n-1) []]
                         return term
 
 
@@ -438,34 +462,16 @@ genMt = do
 genNonce = do
   p <- choose (0,100)
   return (V (Nonce p))
+
+
+
+
+{-
+USM function arguments -> Usm place value
+hash one file
+foreign function call
+
 -}
-
-
---maybe make it more likely to choose a variable
-
-instance Arbitrary APDT where
- arbitrary = sized $ \n -> genAPDTVAR (rem n 10) []
-
-genKIM = do
-  p <- choose (0,100)
-  return (KIM p)
-
-genUSM :: Gen APDT
-genUSM = do
-  return (USM)
-
-
-
-
-
-
-
-
-
-genNewChar :: [APDT] -> Gen Char
-genNewChar ls = do
-  l <- choose ('a','z')
-  if (elem (VAR l) ls) then (genNewChar ls) else (return l)
 
 genLambdaApp :: Int -> [APDT] -> Gen APDT
 genLambdaApp n ls = do
@@ -473,6 +479,11 @@ genLambdaApp n ls = do
   t0 <- genAPDTVAR n ((VAR l):ls)
   t1 <- genAPDTVAR n ls
   return (App (Lambda l MEAS t0) t1)
+
+genNewChar :: [APDT] -> Gen Char
+genNewChar ls = do
+  l <- choose ('a','z')
+  if (elem (VAR l) ls) then (genNewChar ls) else (return l)
 
 genVAR :: [APDT] -> Gen APDT
 genVAR ls = elements ls
@@ -494,20 +505,19 @@ genSIGVAR n ls = do
   t <- genAPDTVAR n ls
   return (LN t SIG)
 
+
+
 genAPDTVAR :: Int -> [APDT] -> Gen APDT
 genAPDTVAR n ls = case n of 0 -> case ls of [] -> do
                                               term <- oneof [genKIM, genUSM]
                                               return term
                                             _ -> do
-                                              --term <- oneof [genVAR ls]
-                                              term <- oneof [genKIM, genUSM, genVAR ls]
+                                              term <- oneof [genKIM, genUSM, genVAR ls, genVAR ls, genVAR ls, genVAR ls]
                                               return term
                             _ -> case ls of [] -> do
-                                              --term <- oneof [genLambdaApp (n-1) ls]
                                               term <- oneof [genLambdaApp (n-1) ls, genLNVAR (n-1) ls, genBRVAR (n-1) ls, genSIGVAR (n-1) ls, genUSM, genKIM]
                                               return term
                                             _ -> do
-                                              --term <- oneof [genLambdaApp (n-1) ls]
                                               term <- oneof [genLambdaApp (n-1) ls, genLNVAR (n-1) ls, genBRVAR (n-1) ls, genSIGVAR (n-1) ls, genUSM, genKIM, genVAR ls]
                                               return term
 
@@ -531,7 +541,7 @@ removeRightAndPlace :: Either String (APDT,Place) -> APDT
 removeRightAndPlace x = case x of Right (t,p) -> t
                                   _ -> error "you got a left in here"
 
-isRight :: Either String (APDT,Place) -> Bool
+isRight :: Either String b -> Bool
 isRight x = case x of Right t -> True
                       _ -> False
 
@@ -550,6 +560,8 @@ quickCheckWith stdArgs {maxSuccess=5000} (\x -> (isEvid (removeRightAndPlace (ev
    evaluate does not result in any errors
 quickCheckWith stdArgs {maxSuccess=5000} (\x -> isRight (evaluate (x,0)))
 
+  getTypeOf does not result in any errors
+quickCheckWith stdArgs {maxSuccess=5000} (\x -> isRight (getTypeOf x))
 
 ---
 
@@ -606,15 +618,15 @@ evaluate (LN (SIG) (USM), 0)
   Left "cannot sign here"
 
 ------------------------------------------------------------------------------------
-getTypeOf (LN (AT 1 USM) USM)
-  Right SeqE (U 1) (U 0)
+getTypeOf (LN (AT (V ( Pl 1)) USM) USM)
+  Right MEAS
 getTypeOf (LN (KIM 1) (SIG))
-  Right SigE (K 1 0) 0
-getTypeOf (App (Lambda 'y' (K 1 0) (LN (VAR 'y') (USM))) (KIM 1))
-  Right SeqE (K 1 0) (U 0)
+  Right MEAS
+getTypeOf (App (Lambda 'y' MEAS (LN (VAR 'y') (USM))) (KIM 1))
+  Right MEAS
 ---
 getTypeOf (BR USM SIG)
   Left "type error in SIG"
-getTypeOf (App (Lambda 'y' (U 0) (BR (VAR 'y') (KIM 1))) (KIM 1))
+getTypeOf (App (Lambda 'y' MEAS (BR (VAR 'y') (KIM 1))) (V (Pl 1)))
   Left "type error in App"
 -}
