@@ -47,23 +47,15 @@ main = do
 
 
 
---main can't have parameters
---so getting the filename has to be hardcoded, got during compile time, or asked for during runtime
 
-
-
-
---hashes a file given at runtime using SHA256
+--hashes a file given statically using SHA256
 
 import           Crypto.Hash             (hashWith, SHA256 (..))
 import qualified Data.ByteString         as B
 
 main :: IO ()
 main = do
-  putStrLn "Give the name of the file: "
-  fileName <- getLine
-  fileContent <- B.readFile fileName
-  putStrLn $ "The file contains: " ++ show fileContent
+  fileContent <- B.readFile "testMultiLine.txt"
+  print fileContent
   let digest = hashWith SHA256 fileContent
   print digest
-
