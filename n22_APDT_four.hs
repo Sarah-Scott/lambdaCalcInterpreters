@@ -87,7 +87,7 @@ data APDT = VAR Id |
             V Val
           deriving (Show, Eq)
 
---took out closures, may cause errors in the future
+
 data Val =  Mt |
             Sig Val Place |
             Kim Place Place |
@@ -278,6 +278,11 @@ combine as bs = case as of x:xs -> case bs of y:ys -> (x,y):(combine xs ys)
 
 ------------------------------------------------------------------------------------
 
+
+--repeat variable names in nested lambdas causes stepping to be incorrect
+--stepping (App (Lambda 'x' MEAS (BR (App (Lambda 'x' MEAS (VAR 'x')) (USM)) (VAR 'x'))) (KIM 1),0)
+--should result in (V (ParV (Usm 0) (Kim 1 0)),0)
+
 --add error handling (Either monad)
 stepping :: (APDT,Place) -> (APDT,Place)
 stepping a = let (t,p) = (step a) in (if (isEvid t) then (t,p) else (stepping (t,p)))
@@ -332,7 +337,7 @@ type Context = [Place]
 addType :: Id -> T -> (Context,EnvE) -> (Context, EnvE)
 addType i t (c,e) = (c,(i,t):e)
 
-
+--needs to check that place is in a valid location in the term
 typeOfTerm :: APDT -> ReaderT (Context,EnvE) (Either String) T
 typeOfTerm t = case t of USM ->  return MEAS
                          KIM q -> return MEAS
@@ -607,6 +612,10 @@ evaluate (App (Lambda 'y' MEAS (App (Lambda 'x' MEAS (LN (VAR 'x') (VAR 'y'))) (
   Right (V (SeqV (ParV (Usm 0) (Kim 1 0)) (Kim 1 0)),0)
 evaluate (App (Lambda 'y' MEAS (App (Lambda 'x' MEAS (LN (VAR 'x') (VAR 'y'))) (USM))) (KIM 1),0)
   Right (V (SeqV (Usm 0) (Kim 1 0)),0)
+evaluate (App (Lambda 'x' MEAS (BR (App (Lambda 'y' MEAS (VAR 'y')) (USM)) (VAR 'x'))) (KIM 1),0)
+  Right (V (ParV (Usm 0) (Kim 1 0)), 0)
+evaluate (App (Lambda 'x' (PLACE 2) (AT (VAR 'x') (USM))) (V (Pl 2)),0)
+  Right (V (Usm 2),0)
 ---
 evaluate (App (Lambda 'y' (MEAS) (LN (VAR 'b') (USM))) (KIM 1), 0)
   Left "identifier does not exist in the environment"

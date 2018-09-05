@@ -1,11 +1,7 @@
-
-
 import Crypto.Sign.Ed25519
 import qualified Data.ByteString as B
 import qualified Crypto.Nonce as CN
 import           Crypto.Hash
-
-
 
 --getLine :: IO Text
 --encodeUtf8 :: Text -> ByteString
@@ -13,6 +9,10 @@ import           Crypto.Hash
 --readFile :: FilePath -> IO ByteString
 --nonce128 :: MonadIO m => Generator -> m ByteString
 
+
+
+--how can I make these functions less reliant on the specific library being used
+--I still want the IO part of all of these functions to not be there
 
 
 --hashes a file given statically using SHA256
