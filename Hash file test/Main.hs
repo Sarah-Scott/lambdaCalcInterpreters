@@ -1,16 +1,18 @@
-#!/usr/bin/env stack
--- stack --resolver lts-9.3 script
 
 
 import Crypto.Sign.Ed25519
 import qualified Data.ByteString as B
 import qualified Crypto.Nonce as CN
-import           Crypto.Hash             (hashWith, SHA256 (..))
+import           Crypto.Hash
+
+
 
 --getLine :: IO Text
 --encodeUtf8 :: Text -> ByteString
 --hashWith :: (ByteArrayAccess ba, HashAlgorithm alg) => alg -> ba -> Digest alg
 --readFile :: FilePath -> IO ByteString
+--nonce128 :: MonadIO m => Generator -> m ByteString
+
 
 
 --hashes a file given statically using SHA256
@@ -21,6 +23,11 @@ doHash = do
   let digest = hashWith SHA256 fileContent
   print digest
 
+doHash' :: IO (Digest SHA256)
+doHash' = do
+  fileContent <- B.readFile "testMultiLine.txt"
+  return (hashWith SHA256 fileContent)
+
 
 
 --generates a nonce
@@ -30,7 +37,14 @@ doNonce = do
   n <- CN.nonce128 g 
   print n
 --should this generate something with only numbers?
- 
+--also these things seem to be different lengths
+
+doNonce' :: IO (B.ByteString)
+doNonce' = do
+  g <- CN.new
+  CN.nonce128 g
+
+
 
 
 --signs a file's contents then verifies it

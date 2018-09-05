@@ -87,7 +87,7 @@ data APDT = VAR Id |
             V Val
           deriving (Show, Eq)
 
---should take the closure out
+--took out closures, may cause errors in the future
 data Val =  Mt |
             Sig Val Place |
             Kim Place Place |
@@ -95,8 +95,7 @@ data Val =  Mt |
             Nonce Place |
             SeqV Val Val |
             ParV Val Val |
-            Pl Place |
-            ClosureV Id APDT Env
+            Pl Place
          deriving (Show,Eq)
 
 
@@ -106,6 +105,7 @@ type Env = [(Id,Val)]
 
 isEvid :: APDT -> Bool
 isEvid ev = case ev of V x -> True
+                       Lambda i t a -> True
                        _ -> False
 
 getVal :: APDT -> Val
@@ -115,7 +115,6 @@ addVar :: Id -> Val -> Env -> Env
 addVar i t env = (i,t):env
 
 
---change SIG (maybe if I feel like it)
 eval :: (APDT,Place) -> ReaderT Env (Either String) (APDT,Place)
 eval (t,p) = case t of KIM q -> return (V (Kim q p), p)
                        USM -> return (V (Usm p), p)
@@ -141,20 +140,16 @@ eval (t,p) = case t of KIM q -> return (V (Kim q p), p)
                          let m = lookup i env
                            in case m of Just v -> (return (V v,p))    
                                         _ -> liftReaderT $ Left "identifier does not exist in the environment"
-                       Lambda i e t0 -> do
-                         env <- askT
-                         return (V (ClosureV i t0 env), p)
+                       Lambda i e t0 -> return (Lambda i e t0,p)
                        App t0 t1 -> do
-                         (V (ClosureV i t0 e), p0') <- eval (t0,p)
+                         (Lambda i e t0', p0') <- eval (t0,p)
                          (V t1', p1') <- eval (t1,p)
-                         localT (useClosure i t1' e) (eval (t0, p))
+                         localT (addVar i t1') (eval (t0',p))
                        SIG -> liftReaderT $ Left "cannot sign here"
                        NONCE -> return (V (Nonce p), p)
                        V x -> return (V x, p)
 
                                               
-useClosure :: Id -> Val -> Env -> Env -> Env
-useClosure i t e _ = (i,t):e
 
 runRead :: ReaderT r m a -> r -> m a
 runRead (ReaderT f) e = f e
@@ -181,6 +176,7 @@ data Debruijn = VARD Int |
 
 isEvidD :: Debruijn -> Bool
 isEvidD ev = case ev of VD x -> True
+                        LambdaD x -> True
                         _ -> False
                         
 
@@ -373,6 +369,7 @@ typeOfTerm t = case t of USM ->  return MEAS
                            case q' of PLACE p -> if (t0==MEAS) then (return MEAS) else (liftReaderT $ Left "type error in AT")
                                       _ -> liftReaderT $ Left "type error in AT"
                          SIG -> liftReaderT $ Left "type error in SIG"
+                         NONCE -> return MEAS
                                                                              
                                   
 
@@ -387,7 +384,7 @@ getTypeOf t = runRead (typeOfTerm t) ([0],[])
 
 --make the number bigger to generate longer terms
 instance Arbitrary APDT where
- arbitrary = sized $ \n -> genAPDT (rem n 20)
+ arbitrary = sized $ \n -> genAPDT (rem n 25)
 
 
 
@@ -473,13 +470,6 @@ genNonce = do
 
 
 
-
-{-
-USM function arguments -> Usm place value
-hash one file
-foreign function call
-
--}
 
 genLambdaApp :: Int -> [APDT] -> Gen APDT
 genLambdaApp n ls = do
